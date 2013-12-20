@@ -21,8 +21,9 @@ uint8_t myI2C_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t fl
 uint8_t myI2C_readFrom(uint8_t address, uint8_t* data, uint8_t length, uint8_t flags);
 
 // flag values used by master
-#define MYI2C_WAIT     0x01 // do not return until transfer is done
-#define MYI2C_NOSTOP   0x02 // do not release bus after transaction
+#define MYI2C_WAIT      0x01 // do not return until transfer is done
+#define MYI2C_NOSTOP    0x02 // do not release bus after transaction
+#define MYI2C_NOTIMEOUT 0x04
 
 // slave handler routine, should return desired ACK status
 // *data  - pointter to fetch/store data
@@ -39,6 +40,8 @@ volatile uint8_t myI2C_datacnt;  // data countter
 #define MYI2C_REPSTART 0x02 // going to use repeated start on next transfer
 #define MYI2C_BUSY     0x04 // transfer ongoing
 volatile uint8_t myI2C_flags;
+volatile uint8_t myI2C_error;
+uint16_t myI2C_timeout = 2000; // default 2ms
 
 void myI2C_init(uint8_t enable_pullup)
 {
@@ -117,17 +120,17 @@ SIGNAL(TWI_vect)
     }
     break;
   case TW_MT_SLA_NACK:  // address sent, nack received
-    //twi_error = TW_MT_SLA_NACK;
+    myI2C_error = 2;
     myI2C_flags &= ~MYI2C_BUSY;
     myI2C_stop();
     break;
   case TW_MT_DATA_NACK: // data sent, nack received
-    //twi_error = TW_MT_DATA_NACK;
+    myI2C_error = 3;
     myI2C_flags &= ~MYI2C_BUSY;
     myI2C_stop();
     break;
   case TW_MT_ARB_LOST: // lost bus arbitration
-    //twi_error = TW_MT_ARB_LOST;
+    myI2C_error = 4;
     myI2C_flags &= ~MYI2C_BUSY;
     myI2C_releaseBus();
     break;
@@ -139,7 +142,7 @@ SIGNAL(TWI_vect)
     myI2C_datacnt--;
   case TW_MR_SLA_ACK:  // address sent, ack received
     // ack if more bytes are expected, otherwise nack
-    if (myI2C_datacnt) {
+    if (myI2C_datacnt>1) {
       myI2C_reply(1);
     } else {
       myI2C_reply(0);
@@ -159,6 +162,7 @@ SIGNAL(TWI_vect)
     }
     break;
   case TW_MR_SLA_NACK: // address sent, nack received
+    myI2C_error = 5;
     myI2C_flags &= ~MYI2C_BUSY;
     myI2C_stop();
     break;
@@ -222,16 +226,27 @@ SIGNAL(TWI_vect)
   }
 }
 
-void myI2C_wait()
+uint8_t myI2C_wait(uint16_t timeout)
 {
+  uint8_t ret;
+  uint32_t start = micros();
   while (myI2C_flags & MYI2C_BUSY) {
-    continue;
+    if ((timeout) && ((micros() - start) > timeout)) {
+      return 1;
+    }
   }
+  ret = myI2C_error;
+  myI2C_error=0;
+  return ret;
 }
 
 uint8_t myI2C_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t flags)
 {
-  myI2C_wait();
+  uint8_t ret;
+  if (ret = myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout)) {
+    return ret;
+  }
+  myI2C_error = 0;
   myI2C_datacnt = length;
   myI2C_dataptr = data;
   myI2C_slarw = TW_WRITE | (address << 1);
@@ -246,7 +261,9 @@ uint8_t myI2C_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t fl
     TWCR = _BV(TWINT) | _BV(TWEA) | _BV(TWEN) | _BV(TWIE) | _BV(TWSTA);
   }
   if (flags & MYI2C_WAIT) {
-    myI2C_wait();
+    if (ret = myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout)) {
+      return ret;
+    }
   }
   return 0;
 }
@@ -254,8 +271,12 @@ uint8_t myI2C_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t fl
 
 uint8_t myI2C_readFrom(uint8_t address, uint8_t* data, uint8_t length, uint8_t flags)
 {
-  myI2C_wait();
+  uint8_t ret;
+  if (ret=myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout)) {
+    return ret;
+  }
 
+  myI2C_error = 0;
   myI2C_datacnt = length;
   myI2C_dataptr = data;
   myI2C_slarw = TW_READ | (address << 1);
@@ -271,8 +292,10 @@ uint8_t myI2C_readFrom(uint8_t address, uint8_t* data, uint8_t length, uint8_t f
   }
 
   if (flags & MYI2C_WAIT) {
-    myI2C_wait();
+    if (ret=myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout)) {
+      return ret;
+    }
   }
-  return 0;
+   return 0;
 }
 
