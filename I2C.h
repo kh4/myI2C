@@ -87,9 +87,16 @@ void myI2C_releaseBus(void)
   TWCR = _BV(TWEN) | _BV(TWIE) | _BV(TWEA) | _BV(TWINT);
 }
 
+void myI2C_recover(void)
+{
+  TWCR = 0;
+  TWCR = _BV(TWEN) | _BV(TWIE) | _BV(TWEA);
+  myI2C_flags = 0;
+}
 // ISR //
 SIGNAL(TWI_vect)
 {
+  uint8_t slack=0;
   //  Serial.println(TW_STATUS,16);
   switch(TW_STATUS) {
     // All Master
@@ -198,12 +205,13 @@ SIGNAL(TWI_vect)
     // Slave Transmitter
   case TW_ST_SLA_ACK:          // addressed, returned ack
   case TW_ST_ARB_LOST_SLA_ACK: // arbitration lost, returned ack
+    slack=1;
     // just fall thru to data sending
   case TW_ST_DATA_ACK: // byte sent, ack returned
 
     if (myI2C_slaveHandler) {
       uint8_t data,ret;
-      ret = myI2C_slaveHandler(&data, MYI2C_SLAVE_ISTX);
+      ret = myI2C_slaveHandler(&data, (slack?MYI2C_SLAVE_ISFIRST:0)|MYI2C_SLAVE_ISTX);
       TWDR = data;
       myI2C_reply(ret); // reply with ACK or NACK depending on slave callback
     } else {
@@ -232,6 +240,7 @@ uint8_t myI2C_wait(uint16_t timeout)
   uint32_t start = micros();
   while (myI2C_flags & MYI2C_BUSY) {
     if ((timeout) && ((micros() - start) > timeout)) {
+      myI2C_recover();
       return 1;
     }
   }

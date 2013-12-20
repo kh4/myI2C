@@ -16,7 +16,11 @@ uint16_t tx_bytes = 0;
 uint8_t slaveHandler(uint8_t *data, uint8_t flags)
 {
   if (flags & MYI2C_SLAVE_ISTX) {
-    *data = outdata++;
+    if (flags & MYI2C_SLAVE_ISFIRST) {
+      *data = 0xFB;
+    } else {
+      *data = outdata++;
+    }
     tx_bytes++;
     return 1;
   } else {
