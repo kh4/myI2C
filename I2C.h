@@ -5,11 +5,10 @@
 
 // API
 
-// Initialize I2C
 void myI2C_init(uint8_t enable_pullup);
 
 // Initialize slave operation
-void myI2C_slaveSetup(uint8_t address, uint8_t mask, uint8_t enable_gcall,
+void myI2C_slaveSetup(uint8_t address, uint8_t mask, uint8_t enableGCall,
                       uint8_t (*handler)(uint8_t *data, uint8_t flags));
 
 // Flag values given to slaveHandler
@@ -33,9 +32,9 @@ uint8_t myI2C_readFrom(uint8_t address, uint8_t* data, uint8_t length, uint8_t f
 uint8_t (*myI2C_slaveHandler)(uint8_t *data, uint8_t flags) = NULL;
 
 // Internal state data
-volatile uint8_t myI2C_slarw;    // slave address & RW bit, used in master mode
-volatile uint8_t *myI2C_dataptr; // TX/RX data ptr
-volatile uint8_t myI2C_datacnt;  // data countter
+volatile uint8_t myI2C_slaRw;    // slave address & RW bit, used in master mode
+volatile uint8_t *myI2C_dataPtr; // TX/RX data ptr
+volatile uint8_t myI2C_dataCnt;  // data countter
 #define MYI2C_DONTSTOP 0x01 // do not release bus after operation
 #define MYI2C_REPSTART 0x02 // going to use repeated start on next transfer
 #define MYI2C_BUSY     0x04 // transfer ongoing
@@ -43,12 +42,12 @@ volatile uint8_t myI2C_flags;
 volatile uint8_t myI2C_error;
 uint16_t myI2C_timeout = 2000; // default 2ms
 
-void myI2C_init(uint8_t enable_pullup)
+void myI2C_init(uint8_t enablePullup)
 {
-  digitalWrite(SDA, enable_pullup?1:0);
-  digitalWrite(SCL, enable_pullup?1:0);
+  digitalWrite(SDA, enablePullup?1:0);
+  digitalWrite(SCL, enablePullup?1:0);
 
-  myI2C_datacnt=0;
+  myI2C_dataCnt=0;
   myI2C_flags=0;
 
   TWSR |= ~(_BV(TWPS0)|_BV(TWPS1));
@@ -57,10 +56,10 @@ void myI2C_init(uint8_t enable_pullup)
   TWCR = _BV(TWEN) | _BV(TWIE) | _BV(TWEA);
 }
 
-void myI2C_slaveSetup(uint8_t address, uint8_t mask, uint8_t enable_gcall,
+void myI2C_slaveSetup(uint8_t address, uint8_t mask, uint8_t enableGCall,
                       uint8_t (*handler)(uint8_t *data, uint8_t flags))
 {
-  TWAR  = (address << 1) | (enable_gcall?1:0);
+  TWAR  = (address << 1) | (enableGCall?1:0);
   TWAMR = (mask << 1);
   myI2C_slaveHandler = handler;
 }
@@ -103,7 +102,7 @@ SIGNAL(TWI_vect)
   case TW_START:     // sent start condition
   case TW_REP_START: // sent repeated start condition
     // copy device address and r/w bit to output register and ack
-    TWDR = myI2C_slarw;
+    TWDR = myI2C_slaRw;
     myI2C_reply(1);
     break;
 
@@ -111,9 +110,9 @@ SIGNAL(TWI_vect)
   case TW_MT_SLA_ACK:  // slave receiver acked address
   case TW_MT_DATA_ACK: // slave receiver acked data
     // if there is data to send, send it, otherwise stop
-    if(myI2C_datacnt--) {
+    if(myI2C_dataCnt--) {
       // copy data to output register and ack
-      TWDR = *(myI2C_dataptr++);
+      TWDR = *(myI2C_dataPtr++);
       myI2C_reply(1);
     } else {
       myI2C_flags &= ~MYI2C_BUSY;
@@ -145,11 +144,11 @@ SIGNAL(TWI_vect)
     // Master Receiver
   case TW_MR_DATA_ACK: // data received, ack sent
     // put byte into buffer
-    *(myI2C_dataptr++) = TWDR;
-    myI2C_datacnt--;
+    *(myI2C_dataPtr++) = TWDR;
+    myI2C_dataCnt--;
   case TW_MR_SLA_ACK:  // address sent, ack received
     // ack if more bytes are expected, otherwise nack
-    if (myI2C_datacnt>1) {
+    if (myI2C_dataCnt>1) {
       myI2C_reply(1);
     } else {
       myI2C_reply(0);
@@ -157,8 +156,8 @@ SIGNAL(TWI_vect)
     break;
   case TW_MR_DATA_NACK: // data received, nack sent
     // put final byte into buffer
-    *(myI2C_dataptr++) = TWDR;
-    myI2C_datacnt--;
+    *(myI2C_dataPtr++) = TWDR;
+    myI2C_dataCnt--;
     myI2C_flags &= ~MYI2C_BUSY;
     if (myI2C_flags&MYI2C_DONTSTOP) {
       myI2C_flags &= ~MYI2C_DONTSTOP;
@@ -180,14 +179,14 @@ SIGNAL(TWI_vect)
   case TW_SR_GCALL_ACK: // addressed generally, returned ack
   case TW_SR_ARB_LOST_SLA_ACK:   // lost arbitration, returned ack
   case TW_SR_ARB_LOST_GCALL_ACK: // lost arbitration, returned ack
-    myI2C_datacnt = 0;
+    myI2C_dataCnt = 0;
     myI2C_reply(1);
     break;
   case TW_SR_DATA_ACK:       // data received, returned ack
   case TW_SR_GCALL_DATA_ACK: // data received generally, returned ack
     if (myI2C_slaveHandler) {
       uint8_t data=TWDR;
-      myI2C_reply(myI2C_slaveHandler(&data, (myI2C_datacnt++==0)?MYI2C_SLAVE_ISFIRST:0));
+      myI2C_reply(myI2C_slaveHandler(&data, (myI2C_dataCnt++==0)?MYI2C_SLAVE_ISFIRST:0));
     } else {
       myI2C_reply(0);
     }
@@ -252,25 +251,25 @@ uint8_t myI2C_wait(uint16_t timeout)
 uint8_t myI2C_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t flags)
 {
   uint8_t ret;
-  if (ret = myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout)) {
+  if ((ret = myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout))) {
     return ret;
   }
   myI2C_error = 0;
-  myI2C_datacnt = length;
-  myI2C_dataptr = data;
-  myI2C_slarw = TW_WRITE | (address << 1);
+  myI2C_dataCnt = length;
+  myI2C_dataPtr = data;
+  myI2C_slaRw = TW_WRITE | (address << 1);
 
   myI2C_flags |= MYI2C_BUSY | ((flags&MYI2C_NOSTOP)?MYI2C_DONTSTOP:0);
 
   if (myI2C_flags & MYI2C_REPSTART) {
     myI2C_flags &= ~MYI2C_REPSTART;
-    TWDR = myI2C_slarw;
+    TWDR = myI2C_slaRw;
     TWCR = _BV(TWINT) | _BV(TWEA) | _BV(TWEN) | _BV(TWIE);
   } else {
     TWCR = _BV(TWINT) | _BV(TWEA) | _BV(TWEN) | _BV(TWIE) | _BV(TWSTA);
   }
   if (flags & MYI2C_WAIT) {
-    if (ret = myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout)) {
+    if ((ret = myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout))) {
       return ret;
     }
   }
@@ -281,27 +280,27 @@ uint8_t myI2C_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t fl
 uint8_t myI2C_readFrom(uint8_t address, uint8_t* data, uint8_t length, uint8_t flags)
 {
   uint8_t ret;
-  if (ret=myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout)) {
+  if ((ret=myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout))) {
     return ret;
   }
 
   myI2C_error = 0;
-  myI2C_datacnt = length;
-  myI2C_dataptr = data;
-  myI2C_slarw = TW_READ | (address << 1);
+  myI2C_dataCnt = length;
+  myI2C_dataPtr = data;
+  myI2C_slaRw = TW_READ | (address << 1);
 
   myI2C_flags |= MYI2C_BUSY | ((flags&MYI2C_NOSTOP)?MYI2C_DONTSTOP:0);
 
   if (myI2C_flags & MYI2C_REPSTART) {
     myI2C_flags &= ~MYI2C_REPSTART;
-    TWDR = myI2C_slarw;
+    TWDR = myI2C_slaRw;
     TWCR = _BV(TWINT) | _BV(TWEA) | _BV(TWEN) | _BV(TWIE);
   } else {
     TWCR = _BV(TWINT) | _BV(TWEA) | _BV(TWEN) | _BV(TWIE) | _BV(TWSTA);
   }
 
   if (flags & MYI2C_WAIT) {
-    if (ret=myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout)) {
+    if ((ret=myI2C_wait((flags & MYI2C_NOTIMEOUT) ? 0 : myI2C_timeout))) {
       return ret;
     }
   }
